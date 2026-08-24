@@ -2,41 +2,81 @@ package org.example.server.server.impl;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.example.KRpcApplication;
+import org.example.config.KRpcConfig;
+import org.example.server.executor.RpcRequestExecutor;
 import org.example.server.netty.initializer.NettyServerInitializer;
 import org.example.server.provider.ServiceProvider;
 import org.example.server.server.RpcServer;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 @Slf4j
-@AllArgsConstructor
 public class NettyRpcServer implements RpcServer {
     private ServiceProvider serviceProvider;
+    private final RpcRequestExecutor requestExecutor;
 
     private ChannelFuture channelFuture;
 
+    // Readiness signal: counted down once the listening socket is actually bound, so callers can
+    // reliably wait for "server is accepting connections" instead of guessing with an arbitrary sleep.
+    private final CountDownLatch startedLatch = new CountDownLatch(1);
+    private volatile boolean bound = false;
+
     public NettyRpcServer(ServiceProvider serviceProvider) {
         this.serviceProvider = serviceProvider;
+        KRpcConfig config = KRpcApplication.getRpcConfig();
+        this.requestExecutor = new RpcRequestExecutor(
+                config.getBusinessThreads(), config.getBusinessQueueCapacity());
     }
 
     @Override
     public void start(int port) {
-        NioEventLoopGroup bossGroup = new NioEventLoopGroup();
+        NioEventLoopGroup bossGroup = new NioEventLoopGroup(1);
         NioEventLoopGroup workGroup = new NioEventLoopGroup();
         System.out.println("netty 服务器启动");
         try {
             ServerBootstrap serverBootstrap = new ServerBootstrap();
             serverBootstrap.group(bossGroup, workGroup).channel(NioServerSocketChannel.class)
-                    .childHandler(new NettyServerInitializer(serviceProvider));
+                    .option(ChannelOption.SO_BACKLOG, 1024)
+                    .childOption(ChannelOption.TCP_NODELAY, true)
+                    .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .childHandler(new NettyServerInitializer(serviceProvider, requestExecutor));
             channelFuture = serverBootstrap.bind(port).sync();
+            bound = true;
+            startedLatch.countDown();
+            log.info("Netty 服务已绑定端口 {}", port);
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            log.error("Netty 服务启动被中断", e);
+            Thread.currentThread().interrupt();
+        } catch (Throwable t) {
+            log.error("Netty 服务启动失败", t);
         } finally {
+            requestExecutor.shutdownGracefully();
             shutdown(bossGroup, workGroup);
+            serviceProvider.close();
+            bound = false;
         }
+    }
+
+    /**
+     * Block until the server is actually accepting connections, or the timeout elapses.
+     *
+     * @return true if the listening socket was bound within the timeout, false otherwise.
+     */
+    public boolean awaitStarted(long timeout, TimeUnit unit) throws InterruptedException {
+        return startedLatch.await(timeout, unit);
+    }
+
+    /** @return true if the listening socket has been bound. */
+    public boolean isBound() {
+        return bound;
     }
 
     @Override
@@ -44,6 +84,7 @@ public class NettyRpcServer implements RpcServer {
         if (channelFuture != null) {
             try {
                 channelFuture.channel().close().sync();
+                bound = false;
                 log.info("Netty服务主通道已关闭");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

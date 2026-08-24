@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -24,16 +25,22 @@ public class ServiceProvider {
     private final String host;
     private final ServiceRegister serviceRegister;
     private final RateLimitProvider rateLimitProvider;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public ServiceProvider(String host, int port) {
+        this(host, port, new ZKServiceRegister(), new RateLimitProvider());
+    }
+
+    public ServiceProvider(String host, int port, ServiceRegister serviceRegister,
+                           RateLimitProvider rateLimitProvider) {
         this.host = host;
         this.port = port;
         this.interfaceProvider = new ConcurrentHashMap<>();
         this.retryServiceMap = new ConcurrentHashMap<>();
         this.failureCounter = new ConcurrentHashMap<>();
         this.degradedServices = ConcurrentHashMap.newKeySet();
-        this.serviceRegister = new ZKServiceRegister();
-        this.rateLimitProvider = new RateLimitProvider();
+        this.serviceRegister = serviceRegister;
+        this.rateLimitProvider = rateLimitProvider;
     }
 
     public ServiceProvider() {
@@ -85,5 +92,17 @@ public class ServiceProvider {
         serviceRegister.unregister(interfaceName, address, canRetry);
         log.error("Service degraded and unregistered after consecutive failures, service={}, address={}",
                 interfaceName, host + ":" + port);
+    }
+
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        InetSocketAddress address = new InetSocketAddress(host, port);
+        for (String interfaceName : interfaceProvider.keySet()) {
+            serviceRegister.unregister(interfaceName, address,
+                    Boolean.TRUE.equals(retryServiceMap.get(interfaceName)));
+        }
+        serviceRegister.close();
     }
 }

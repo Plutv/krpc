@@ -4,9 +4,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.curator.framework.state.ConnectionState;
+import org.apache.curator.framework.state.ConnectionStateListener;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.example.KRpcApplication;
 import org.example.client.cache.ServiceCache;
+import org.example.config.KRpcConfig;
 import org.example.client.serviceCenter.balance.ConsistencyHashBalance;
 import org.example.client.serviceCenter.balance.LoadBalance;
 import org.example.client.serviceCenter.balance.LruLoadBalance;
@@ -18,6 +21,7 @@ import org.example.client.serviceCenter.zkWatcher.ZkWatcher;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,28 +35,35 @@ import java.util.concurrent.TimeUnit;
 public class ZkServiceCenter implements ServiceCenter {
     private static final String ROOT_PATH = "MyRpc";
     private static final String RETRY_PATH = "CanRetry";
-    private static final long PROBE_INTERVAL_SECONDS = 10L;
-    private static final int PROBE_TIMEOUT_MILLIS = 800;
+    private static final String LEGACY_RETRY_MARKER = "__legacy__";
 
     private final CuratorFramework client;
     private final ServiceCache serviceCache;
     private final ConcurrentMap<String, LoadBalance> loadBalanceMap = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Set<String>> unavailableNodeMap = new ConcurrentHashMap<>();
-    private final Set<String> retryServiceCache = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<String, Set<String>> retryProviderMap = new ConcurrentHashMap<>();
     private final ScheduledExecutorService probeExecutor;
     private final String loadBalanceType;
+    private final NodeHealthTracker nodeHealthTracker;
+    private final long probeIntervalSeconds;
+    private final int probeTimeoutMillis;
+    private final ZkWatcher watcher;
 
     public ZkServiceCenter() {
         RetryPolicy policy = new ExponentialBackoffRetry(1000, 3);
+        KRpcConfig config = KRpcApplication.getRpcConfig();
         this.client = CuratorFrameworkFactory.builder()
-                .connectString("127.0.0.1:2181")
-                .sessionTimeoutMs(40000)
+                .connectString(config.getRegistryAddress())
+                .sessionTimeoutMs(config.getRegistrySessionTimeoutMillis())
                 .retryPolicy(policy)
                 .namespace(ROOT_PATH)
                 .build();
         this.client.start();
         this.serviceCache = new ServiceCache();
-        this.loadBalanceType = KRpcApplication.getRpcConfig().getLoadBalance();
+        this.loadBalanceType = config.getLoadBalance();
+        this.nodeHealthTracker = new NodeHealthTracker(config.getNodeFailureThreshold());
+        this.probeIntervalSeconds = config.getNodeProbeIntervalSeconds();
+        this.probeTimeoutMillis = config.getNodeProbeTimeoutMillis();
         this.probeExecutor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
@@ -63,7 +74,8 @@ public class ZkServiceCenter implements ServiceCenter {
         });
 
         initRetryCache();
-        registerWatcher();
+        this.watcher = registerWatcher();
+        registerConnectionStateListener();
         startProbeTask();
     }
 
@@ -101,7 +113,15 @@ public class ZkServiceCenter implements ServiceCenter {
 
     @Override
     public boolean checkRetry(String serviceName) {
-        return retryServiceCache.contains(serviceName);
+        Set<String> providers = retryProviderMap.get(serviceName);
+        if (providers == null || providers.isEmpty()) {
+            return false;
+        }
+        if (providers.contains(LEGACY_RETRY_MARKER)) {
+            return true;
+        }
+        List<String> serviceNodes = serviceCache.getServiceFromCache(serviceName);
+        return !serviceNodes.isEmpty() && providers.containsAll(serviceNodes);
     }
 
     @Override
@@ -110,6 +130,10 @@ public class ZkServiceCenter implements ServiceCenter {
             return;
         }
         String addressStr = toAddress(address);
+        if (!nodeHealthTracker.recordFailure(serviceName, addressStr)) {
+            log.debug("Node failure below quarantine threshold, service={}, address={}", serviceName, addressStr);
+            return;
+        }
         unavailableNodeMap.computeIfAbsent(serviceName, key -> ConcurrentHashMap.newKeySet()).add(addressStr);
         LoadBalance loadBalance = loadBalanceMap.get(serviceName);
         if (loadBalance != null) {
@@ -124,6 +148,7 @@ public class ZkServiceCenter implements ServiceCenter {
             return;
         }
         String addressStr = toAddress(address);
+        nodeHealthTracker.recordSuccess(serviceName, addressStr);
         List<String> cached = serviceCache.getServiceFromCache(serviceName);
         if (!cached.contains(addressStr)) {
             return;
@@ -138,18 +163,29 @@ public class ZkServiceCenter implements ServiceCenter {
     }
 
     private void initRetryCache() {
+        retryProviderMap.clear();
         try {
             if (client.checkExists().forPath("/" + RETRY_PATH) == null) {
                 return;
             }
             List<String> services = client.getChildren().forPath("/" + RETRY_PATH);
-            retryServiceCache.addAll(services);
+            for (String service : services) {
+                String servicePath = "/" + RETRY_PATH + "/" + service;
+                List<String> providers = client.getChildren().forPath(servicePath);
+                if (!providers.isEmpty()) {
+                    retryProviderMap.put(service, ConcurrentHashMap.newKeySet());
+                    retryProviderMap.get(service).addAll(providers);
+                } else if (client.checkExists().forPath(servicePath).getEphemeralOwner() != 0L) {
+                    retryProviderMap.computeIfAbsent(service, key -> ConcurrentHashMap.newKeySet())
+                            .add(LEGACY_RETRY_MARKER);
+                }
+            }
         } catch (Exception e) {
             log.warn("Load retry whitelist from registry failed", e);
         }
     }
 
-    private void registerWatcher() {
+    private ZkWatcher registerWatcher() {
         ServiceChangeListener listener = new ServiceChangeListener() {
             @Override
             public void onAdd(String serviceName, String address) {
@@ -159,6 +195,7 @@ public class ZkServiceCenter implements ServiceCenter {
                 if (unavailable != null) {
                     unavailable.remove(address);
                 }
+                nodeHealthTracker.recordSuccess(serviceName, address);
                 log.info("Watcher add service node, service={}, address={}", serviceName, address);
             }
 
@@ -173,24 +210,105 @@ public class ZkServiceCenter implements ServiceCenter {
                 if (unavailable != null) {
                     unavailable.remove(address);
                 }
+                nodeHealthTracker.remove(serviceName, address);
                 log.info("Watcher remove service node, service={}, address={}", serviceName, address);
             }
 
             @Override
             public void onRetryAdd(String serviceName) {
-                retryServiceCache.add(serviceName);
+                retryProviderMap.computeIfAbsent(serviceName, key -> ConcurrentHashMap.newKeySet())
+                        .add(LEGACY_RETRY_MARKER);
                 log.info("Watcher add retry whitelist service={}", serviceName);
             }
 
             @Override
             public void onRetryRemove(String serviceName) {
-                retryServiceCache.remove(serviceName);
+                removeRetryProvider(serviceName, LEGACY_RETRY_MARKER);
                 log.info("Watcher remove retry whitelist service={}", serviceName);
+            }
+
+            @Override
+            public void onRetryAdd(String serviceName, String address) {
+                retryProviderMap.computeIfAbsent(serviceName, key -> ConcurrentHashMap.newKeySet()).add(address);
+                log.info("Watcher add retry provider, service={}, address={}", serviceName, address);
+            }
+
+            @Override
+            public void onRetryRemove(String serviceName, String address) {
+                removeRetryProvider(serviceName, address);
+                log.info("Watcher remove retry provider, service={}, address={}", serviceName, address);
             }
         };
 
         ZkWatcher watcher = new ZkWatcher(client, listener);
         watcher.watchToUpdate("/");
+        return watcher;
+    }
+
+    private void removeRetryProvider(String serviceName, String address) {
+        Set<String> providers = retryProviderMap.get(serviceName);
+        if (providers == null) {
+            return;
+        }
+        providers.remove(address);
+        if (providers.isEmpty()) {
+            retryProviderMap.remove(serviceName, providers);
+        }
+    }
+
+    private void registerConnectionStateListener() {
+        client.getConnectionStateListenable().addListener(new ConnectionStateListener() {
+            @Override
+            public void stateChanged(CuratorFramework curatorFramework, ConnectionState newState) {
+                if (newState == ConnectionState.RECONNECTED) {
+                    probeExecutor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            refreshRegistryState();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private void refreshRegistryState() {
+        try {
+            Set<String> registryServices = new HashSet<>(client.getChildren().forPath("/"));
+            registryServices.remove(RETRY_PATH);
+
+            Set<String> allServices = new HashSet<>(serviceCache.serviceNames());
+            allServices.addAll(registryServices);
+            for (String serviceName : allServices) {
+                List<String> addresses = registryServices.contains(serviceName)
+                        ? client.getChildren().forPath("/" + serviceName)
+                        : new ArrayList<String>();
+                synchronizeService(serviceName, addresses);
+            }
+            initRetryCache();
+            log.info("Registry state refreshed after ZooKeeper reconnect, services={}", registryServices.size());
+        } catch (Exception e) {
+            log.warn("Refresh registry state after reconnect failed", e);
+        }
+    }
+
+    private void synchronizeService(String serviceName, List<String> addresses) {
+        List<String> previous = serviceCache.getServiceFromCache(serviceName);
+        serviceCache.setServiceToCache(serviceName, addresses);
+
+        LoadBalance loadBalance = loadBalanceMap.computeIfAbsent(serviceName, key -> createLoadBalance());
+        for (String address : previous) {
+            loadBalance.delNode(address);
+            if (!addresses.contains(address)) {
+                nodeHealthTracker.remove(serviceName, address);
+            }
+        }
+        Set<String> unavailable = unavailableNodeMap.get(serviceName);
+        for (String address : addresses) {
+            if (unavailable == null || !unavailable.contains(address)) {
+                loadBalance.addNode(address);
+            }
+        }
     }
 
     private void startProbeTask() {
@@ -203,7 +321,7 @@ public class ZkServiceCenter implements ServiceCenter {
                     log.error("Probe unavailable nodes failed", throwable);
                 }
             }
-        }, PROBE_INTERVAL_SECONDS, PROBE_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        }, probeIntervalSeconds, probeIntervalSeconds, TimeUnit.SECONDS);
     }
 
     private void probeUnavailableNodes() {
@@ -229,7 +347,7 @@ public class ZkServiceCenter implements ServiceCenter {
 
     private boolean probeAddress(InetSocketAddress address) {
         try (Socket socket = new Socket()) {
-            socket.connect(address, PROBE_TIMEOUT_MILLIS);
+            socket.connect(address, probeTimeoutMillis);
             return true;
         } catch (Exception ignored) {
             return false;
@@ -241,11 +359,7 @@ public class ZkServiceCenter implements ServiceCenter {
             return new ArrayList<>();
         }
         List<String> addresses = client.getChildren().forPath("/" + serviceName);
-        serviceCache.setServiceToCache(serviceName, addresses);
-        LoadBalance loadBalance = loadBalanceMap.computeIfAbsent(serviceName, key -> createLoadBalance());
-        for (String address : addresses) {
-            loadBalance.addNode(address);
-        }
+        synchronizeService(serviceName, addresses);
         return addresses;
     }
 
@@ -299,5 +413,12 @@ public class ZkServiceCenter implements ServiceCenter {
             log.warn("Invalid address format: {}", address, e);
             return null;
         }
+    }
+
+    @Override
+    public void close() {
+        watcher.close();
+        probeExecutor.shutdownNow();
+        client.close();
     }
 }

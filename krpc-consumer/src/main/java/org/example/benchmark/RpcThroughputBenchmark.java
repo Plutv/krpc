@@ -14,6 +14,7 @@ import org.example.common.message.RpcRequest;
 import org.example.common.message.RpcResponse;
 import org.example.service.UserService;
 
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -53,8 +54,8 @@ public class RpcThroughputBenchmark {
 
     private static void printHeader(BenchmarkConfig config) {
         System.out.println("========== RPC Throughput Benchmark ==========");
-        System.out.println("Please start provider first: org.example.provider.ProviderTest");
-        System.out.println("Tip: disable provider-side println/logging for cleaner throughput data.");
+        System.out.println("Please start provider first: org.example.provider.BenchmarkProvider");
+        System.out.println("Benchmark provider disables registry, rate limiting, tracing and business logging.");
         System.out.println("Host: " + config.host + ", Port: " + config.port);
         System.out.println("Total Requests: " + config.totalRequests
                 + ", Concurrency: " + config.concurrency
@@ -78,11 +79,13 @@ public class RpcThroughputBenchmark {
         CountDownLatch latch = new CountDownLatch(totalRequests);
         AtomicInteger success = new AtomicInteger();
         AtomicInteger failed = new AtomicInteger();
+        long[] latencyNanos = new long[totalRequests];
 
         long startNs = System.nanoTime();
         for (int i = 0; i < totalRequests; i++) {
             final int requestNo = i;
             pool.submit(() -> {
+                long requestStartNs = System.nanoTime();
                 try {
                     RpcRequest request = buildRequest(requestNo);
                     RpcResponse response = client.sendRequest(request);
@@ -94,6 +97,7 @@ public class RpcThroughputBenchmark {
                 } catch (Exception e) {
                     failed.incrementAndGet();
                 } finally {
+                    latencyNanos[requestNo] = System.nanoTime() - requestStartNs;
                     latch.countDown();
                 }
             });
@@ -105,7 +109,8 @@ public class RpcThroughputBenchmark {
         pool.shutdown();
         pool.awaitTermination(30, TimeUnit.SECONDS);
 
-        BenchResult result = BenchResult.of(mode, totalRequests, success.get(), failed.get(), costNs);
+        BenchResult result = BenchResult.of(
+                mode, totalRequests, success.get(), failed.get(), costNs, latencyNanos);
         System.out.println(result);
         return result;
     }
@@ -235,26 +240,50 @@ public class RpcThroughputBenchmark {
         private final int failed;
         private final double costSeconds;
         private final double qps;
+        private final double p50Millis;
+        private final double p95Millis;
+        private final double p99Millis;
 
-        private BenchResult(String mode, int total, int success, int failed, double costSeconds, double qps) {
+        private BenchResult(String mode, int total, int success, int failed,
+                            double costSeconds, double qps,
+                            double p50Millis, double p95Millis, double p99Millis) {
             this.mode = mode;
             this.total = total;
             this.success = success;
             this.failed = failed;
             this.costSeconds = costSeconds;
             this.qps = qps;
+            this.p50Millis = p50Millis;
+            this.p95Millis = p95Millis;
+            this.p99Millis = p99Millis;
         }
 
-        private static BenchResult of(String mode, int total, int success, int failed, long costNs) {
+        private static BenchResult of(String mode, int total, int success, int failed,
+                                      long costNs, long[] latencyNanos) {
             double seconds = Math.max(0.000001D, costNs / 1_000_000_000.0D);
             double qps = success / seconds;
-            return new BenchResult(mode, total, success, failed, seconds, qps);
+            long[] sorted = Arrays.copyOf(latencyNanos, latencyNanos.length);
+            Arrays.sort(sorted);
+            return new BenchResult(mode, total, success, failed, seconds, qps,
+                    percentileMillis(sorted, 0.50D),
+                    percentileMillis(sorted, 0.95D),
+                    percentileMillis(sorted, 0.99D));
+        }
+
+        private static double percentileMillis(long[] sorted, double percentile) {
+            if (sorted.length == 0) {
+                return 0D;
+            }
+            int index = (int) Math.ceil(percentile * sorted.length) - 1;
+            return sorted[Math.max(0, Math.min(index, sorted.length - 1))] / 1_000_000D;
         }
 
         @Override
         public String toString() {
-            return String.format("[%s] total=%d success=%d failed=%d cost=%.3fs qps=%.2f req/s",
-                    mode, total, success, failed, costSeconds, qps);
+            return String.format("[%s] total=%d success=%d failed=%d cost=%.3fs "
+                            + "qps=%.2f req/s p50=%.3fms p95=%.3fms p99=%.3fms",
+                    mode, total, success, failed, costSeconds, qps,
+                    p50Millis, p95Millis, p99Millis);
         }
     }
 }

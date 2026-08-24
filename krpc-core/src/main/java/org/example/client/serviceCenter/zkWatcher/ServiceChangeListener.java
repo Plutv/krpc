@@ -20,4 +20,12 @@ public interface ServiceChangeListener {
 
     default void onRetryRemove(String serviceName) {
     }
+
+    default void onRetryAdd(String serviceName, String address) {
+        onRetryAdd(serviceName);
+    }
+
+    default void onRetryRemove(String serviceName, String address) {
+        onRetryRemove(serviceName);
+    }
 }

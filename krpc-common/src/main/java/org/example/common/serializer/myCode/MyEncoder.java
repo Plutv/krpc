@@ -3,6 +3,7 @@ package org.example.common.serializer.myCode;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
+import io.netty.handler.codec.TooLongFrameException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.common.message.MessageType;
@@ -16,9 +17,6 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 @AllArgsConstructor
 public class MyEncoder extends MessageToByteEncoder {
-    private static final short MAGIC = (short) 0xCAFE;
-    private static final byte VERSION = 1;
-
     private Serializer serializer;
 
     @Override
@@ -40,9 +38,12 @@ public class MyEncoder extends MessageToByteEncoder {
         }
         String traceMsg = (traceId == null ? "" : traceId) + ";" + (spanId == null ? "" : spanId);
         byte[] traceBytes = traceMsg.getBytes(StandardCharsets.UTF_8);
+        if (traceBytes.length > ProtocolConstants.MAX_TRACE_LENGTH) {
+            throw new TooLongFrameException("traceLength exceeds limit: " + traceBytes.length);
+        }
 
-        out.writeShort(MAGIC);
-        out.writeByte(VERSION);
+        out.writeShort(ProtocolConstants.MAGIC);
+        out.writeByte(ProtocolConstants.VERSION);
         out.writeInt(traceBytes.length);
         out.writeBytes(traceBytes);
 
@@ -56,6 +57,9 @@ public class MyEncoder extends MessageToByteEncoder {
         }
         out.writeShort(serializer.getType());
         byte[] serializeBytes = serializer.serialize(msg);
+        if (serializeBytes.length > ProtocolConstants.MAX_BODY_LENGTH) {
+            throw new TooLongFrameException("bodyLength exceeds limit: " + serializeBytes.length);
+        }
         out.writeInt(serializeBytes.length);
         out.writeBytes(serializeBytes);
     }

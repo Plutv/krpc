@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -77,5 +78,9 @@ public class ServiceCache {
             return;
         }
         log.warn("Remove from cache ignored, service={}, address={} not found", serviceName, address);
+    }
+
+    public Set<String> serviceNames() {
+        return new java.util.HashSet<>(cache.keySet());
     }
 }

@@ -4,7 +4,9 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +30,9 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 public class NettyRpcClient implements RpcClient {
     private static final long REQUEST_TIMEOUT_MILLIS = 5000L;
+    private static final int CONNECT_TIMEOUT_MILLIS = 3000;
+    private static final int WRITE_BUFFER_LOW_WATER_MARK = 64 * 1024;
+    private static final int WRITE_BUFFER_HIGH_WATER_MARK = 128 * 1024;
 
     private String host;
     private int port;
@@ -35,6 +40,7 @@ public class NettyRpcClient implements RpcClient {
     public static final Bootstrap bootstrap;
     public static final EventLoopGroup eventLoopGroup;
     private static final ConcurrentMap<String, Channel> CHANNEL_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, Object> CHANNEL_LOCKS = new ConcurrentHashMap<>();
 
     private ServiceCenter serviceCenter;
 
@@ -52,11 +58,18 @@ public class NettyRpcClient implements RpcClient {
         bootstrap = new Bootstrap();
         bootstrap.group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                        new WriteBufferWaterMark(WRITE_BUFFER_LOW_WATER_MARK, WRITE_BUFFER_HIGH_WATER_MARK))
                 .handler(new NettyClientInitializer());
     }
 
     @Override
     public RpcResponse sendRequest(RpcRequest request) {
+        long requestDeadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(REQUEST_TIMEOUT_MILLIS);
         if (request.getTraceId() == null || request.getTraceId().isEmpty()) {
             request.setTraceId(TraceContext.getTraceId());
         }
@@ -73,44 +86,48 @@ public class NettyRpcClient implements RpcClient {
         }
 
         CompletableFuture<RpcResponse> responseFuture = new CompletableFuture<>();
-        PendingRequests.put(requestId, responseFuture);
 
         try {
             Channel channel = getOrCreateChannel(address);
+            if (!channel.isWritable()) {
+                return RpcResponse.fail("rpc client is overloaded");
+            }
+            PendingRequests.put(requestId, responseFuture, channel);
             ChannelFuture writeFuture = channel.writeAndFlush(request);
             writeFuture.addListener((ChannelFutureListener) future -> {
                 if (!future.isSuccess()) {
-                    if (serviceCenter != null) {
-                        serviceCenter.markNodeAsDown(request.getInterfaceName(), address);
-                    }
                     PendingRequests.fail(requestId, future.cause());
                 }
             });
 
-            RpcResponse response = responseFuture.get(REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
-            if (response != null && response.getCode() == 200 && serviceCenter != null) {
+            long remainingNanos = requestDeadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw new TimeoutException("request deadline exceeded before waiting for response");
+            }
+            RpcResponse response = responseFuture.get(remainingNanos, TimeUnit.NANOSECONDS);
+            if (response != null && serviceCenter != null) {
                 serviceCenter.markNodeAsUp(request.getInterfaceName(), address);
             }
             return response;
         } catch (TimeoutException e) {
-            log.error("rpc request timeout, requestId={}, service={}", requestId, request.getInterfaceName());
-            PendingRequests.remove(requestId);
+            log.error("rpc request timeout, requestId={}, service={}, address={}",
+                    requestId, request.getInterfaceName(), address);
             if (serviceCenter != null) {
                 serviceCenter.markNodeAsDown(request.getInterfaceName(), address);
             }
             return RpcResponse.fail("rpc request timeout");
         } catch (InterruptedException e) {
             log.error("rpc request was interrupted: {}", e.getMessage(), e);
-            PendingRequests.remove(requestId);
             Thread.currentThread().interrupt();
             return RpcResponse.fail("rpc request interrupted");
         } catch (Exception e) {
             log.error("rpc request failed: {}", e.getMessage(), e);
-            PendingRequests.remove(requestId);
             if (serviceCenter != null) {
                 serviceCenter.markNodeAsDown(request.getInterfaceName(), address);
             }
             return RpcResponse.fail("rpc request failed");
+        } finally {
+            PendingRequests.remove(requestId);
         }
     }
 
@@ -136,23 +153,37 @@ public class NettyRpcClient implements RpcClient {
         return request.getInterfaceName() + "#" + request.getMethodName() + "#" + Arrays.deepHashCode(params);
     }
 
-    private Channel getOrCreateChannel(InetSocketAddress address) throws InterruptedException {
+    private Channel getOrCreateChannel(InetSocketAddress address) throws InterruptedException, TimeoutException {
         String channelKey = address.getHostString() + ":" + address.getPort();
         Channel cachedChannel = CHANNEL_CACHE.get(channelKey);
         if (isChannelAvailable(cachedChannel)) {
             return cachedChannel;
         }
 
-        synchronized (CHANNEL_CACHE) {
+        Object channelLock = CHANNEL_LOCKS.computeIfAbsent(channelKey, key -> new Object());
+        synchronized (channelLock) {
             cachedChannel = CHANNEL_CACHE.get(channelKey);
             if (isChannelAvailable(cachedChannel)) {
                 return cachedChannel;
             }
 
-            Channel channel = bootstrap.connect(address.getHostString(), address.getPort()).sync().channel();
+            ChannelFuture connectFuture = bootstrap.connect(address.getHostString(), address.getPort());
+            if (!connectFuture.await(CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                connectFuture.cancel(true);
+                connectFuture.channel().close();
+                throw new TimeoutException("connect timeout: " + channelKey);
+            }
+            if (!connectFuture.isSuccess()) {
+                throw new IllegalStateException("failed to connect to " + channelKey, connectFuture.cause());
+            }
+
+            Channel channel = connectFuture.channel();
             CHANNEL_CACHE.put(channelKey, channel);
-            channel.closeFuture().addListener((ChannelFutureListener) future ->
-                    CHANNEL_CACHE.remove(channelKey, channel));
+            channel.closeFuture().addListener((ChannelFutureListener) future -> {
+                if (CHANNEL_CACHE.remove(channelKey, channel)) {
+                    CHANNEL_LOCKS.remove(channelKey, channelLock);
+                }
+            });
             return channel;
         }
     }

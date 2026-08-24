@@ -11,6 +11,7 @@ import org.example.common.serializer.mySerializer.ProtobufSerializer;
 import org.example.common.serializer.mySerializer.Serializer;
 import org.example.server.netty.handler.HeartbeatHandler;
 import org.example.server.netty.handler.NettyServerHandler;
+import org.example.server.executor.RpcRequestExecutor;
 import org.example.server.provider.ServiceProvider;
 import org.example.common.serializer.myCode.MyDecoder;
 import org.example.common.serializer.myCode.MyEncoder;
@@ -22,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 public class NettyServerInitializer extends ChannelInitializer<SocketChannel> {
     private static final Serializer SERIALIZER = resolveSerializer();
     private ServiceProvider serviceProvider;
+    private RpcRequestExecutor requestExecutor;
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         ChannelPipeline pipeline = ch.pipeline();
@@ -31,7 +33,7 @@ public class NettyServerInitializer extends ChannelInitializer<SocketChannel> {
         pipeline.addLast(new MyDecoder());
         pipeline.addLast(new MyEncoder(SERIALIZER));
 
-        pipeline.addLast(new NettyServerHandler(serviceProvider));
+        pipeline.addLast(new NettyServerHandler(serviceProvider, requestExecutor));
     }
 
     private static Serializer resolveSerializer() {

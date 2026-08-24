@@ -6,11 +6,12 @@ import org.apache.curator.framework.recipes.cache.CuratorCacheListener;
 
 import java.util.Arrays;
 
-public class ZkWatcher {
+public class ZkWatcher implements AutoCloseable {
     private static final String RETRY_PATH = "CanRetry";
 
     private final CuratorFramework client;
     private final ServiceChangeListener listener;
+    private CuratorCache curatorCache;
 
     public ZkWatcher(CuratorFramework client, ServiceChangeListener listener) {
         this.client = client;
@@ -18,7 +19,7 @@ public class ZkWatcher {
     }
 
     public void watchToUpdate(String path) {
-        CuratorCache curatorCache = CuratorCache.build(client, path);
+        curatorCache = CuratorCache.build(client, path);
         curatorCache.listenable().addListener(new CuratorCacheListener() {
             @Override
             public void event(Type type, ChildData oldData, ChildData newData) {
@@ -42,14 +43,20 @@ public class ZkWatcher {
 
     private void handleCreate(ChildData data) {
         String[] nodes = parsePath(data);
-        if (nodes.length != 2) {
+        if (nodes.length < 2) {
             return;
         }
         if (RETRY_PATH.equals(nodes[0])) {
-            listener.onRetryAdd(nodes[1]);
+            if (nodes.length == 3) {
+                listener.onRetryAdd(nodes[1], nodes[2]);
+            } else if (nodes.length == 2 && isEphemeral(data)) {
+                listener.onRetryAdd(nodes[1]);
+            }
             return;
         }
-        listener.onAdd(nodes[0], nodes[1]);
+        if (nodes.length == 2) {
+            listener.onAdd(nodes[0], nodes[1]);
+        }
     }
 
     private void handleReplace(ChildData oldData, ChildData newData) {
@@ -79,14 +86,20 @@ public class ZkWatcher {
 
     private void handleDelete(ChildData data) {
         String[] nodes = parsePath(data);
-        if (nodes.length != 2) {
+        if (nodes.length < 2) {
             return;
         }
         if (RETRY_PATH.equals(nodes[0])) {
-            listener.onRetryRemove(nodes[1]);
+            if (nodes.length == 3) {
+                listener.onRetryRemove(nodes[1], nodes[2]);
+            } else if (nodes.length == 2 && isEphemeral(data)) {
+                listener.onRetryRemove(nodes[1]);
+            }
             return;
         }
-        listener.onRemove(nodes[0], nodes[1]);
+        if (nodes.length == 2) {
+            listener.onRemove(nodes[0], nodes[1]);
+        }
     }
 
     private String[] parsePath(ChildData childData) {
@@ -96,5 +109,17 @@ public class ZkWatcher {
         return Arrays.stream(childData.getPath().split("/"))
                 .filter(part -> part != null && !part.isEmpty())
                 .toArray(String[]::new);
+    }
+
+    private boolean isEphemeral(ChildData childData) {
+        return childData != null && childData.getStat() != null
+                && childData.getStat().getEphemeralOwner() != 0L;
+    }
+
+    @Override
+    public void close() {
+        if (curatorCache != null) {
+            curatorCache.close();
+        }
     }
 }
