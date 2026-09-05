@@ -8,7 +8,7 @@ import org.example.common.message.RequestType;
 import org.example.common.message.RpcRequest;
 import org.example.common.message.RpcResponse;
 import org.example.common.trace.TraceContext;
-import org.example.server.executor.RpcRequestExecutor;
+import org.example.server.executor.RpcRequestDispatcher;
 import org.example.server.provider.ServiceProvider;
 import org.example.server.ratelimit.RateLimit;
 import org.example.trace.interceptor.ServerTraceInterceptor;
@@ -19,11 +19,11 @@ import java.lang.reflect.Method;
 @Slf4j
 public class NettyServerHandler extends SimpleChannelInboundHandler<RpcRequest> {
     private final ServiceProvider serviceProvider;
-    private final RpcRequestExecutor requestExecutor;
+    private final RpcRequestDispatcher requestDispatcher;
 
-    public NettyServerHandler(ServiceProvider serviceProvider, RpcRequestExecutor requestExecutor) {
+    public NettyServerHandler(ServiceProvider serviceProvider, RpcRequestDispatcher requestDispatcher) {
         this.serviceProvider = serviceProvider;
-        this.requestExecutor = requestExecutor;
+        this.requestDispatcher = requestDispatcher;
     }
 
     @Override
@@ -38,13 +38,13 @@ public class NettyServerHandler extends SimpleChannelInboundHandler<RpcRequest> 
             return;
         }
 
-        boolean accepted = requestExecutor.submit(() -> handleRequest(channelHandlerContext, rpcRequest));
+        boolean accepted = requestDispatcher.dispatch(() -> handleRequest(channelHandlerContext, rpcRequest));
         if (!accepted) {
             RpcResponse response = RpcResponse.fail(503, "server overloaded");
             response.setRequestId(rpcRequest.getRequestId());
             channelHandlerContext.writeAndFlush(response);
             log.warn("Business executor overloaded, active={}, queued={}, service={}",
-                    requestExecutor.activeCount(), requestExecutor.queueSize(), rpcRequest.getInterfaceName());
+                    requestDispatcher.activeCount(), requestDispatcher.queueSize(), rpcRequest.getInterfaceName());
         }
     }
 

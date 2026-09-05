@@ -16,7 +16,7 @@ class RpcRequestExecutorTest {
         CountDownLatch running = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         try {
-            assertTrue(executor.submit(() -> {
+            assertTrue(executor.dispatch(() -> {
                 running.countDown();
                 try {
                     release.await();
@@ -25,8 +25,8 @@ class RpcRequestExecutorTest {
                 }
             }));
             assertTrue(running.await(1, TimeUnit.SECONDS));
-            assertTrue(executor.submit(() -> { }));
-            assertFalse(executor.submit(() -> { }),
+            assertTrue(executor.dispatch(() -> { }));
+            assertFalse(executor.dispatch(() -> { }),
                     "third task must be rejected instead of growing memory usage");
         } finally {
             release.countDown();

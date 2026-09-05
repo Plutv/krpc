@@ -8,6 +8,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import lombok.extern.slf4j.Slf4j;
 import org.example.KRpcApplication;
 import org.example.config.KRpcConfig;
+import org.example.server.executor.RpcRequestDispatcher;
 import org.example.server.executor.RpcRequestExecutor;
 import org.example.server.netty.initializer.NettyServerInitializer;
 import org.example.server.provider.ServiceProvider;
@@ -19,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class NettyRpcServer implements RpcServer {
     private ServiceProvider serviceProvider;
-    private final RpcRequestExecutor requestExecutor;
+    private final RpcRequestDispatcher requestDispatcher;
 
     private ChannelFuture channelFuture;
 
@@ -29,10 +30,17 @@ public class NettyRpcServer implements RpcServer {
     private volatile boolean bound = false;
 
     public NettyRpcServer(ServiceProvider serviceProvider) {
+        this(serviceProvider, createDefaultDispatcher());
+    }
+
+    public NettyRpcServer(ServiceProvider serviceProvider, RpcRequestDispatcher requestDispatcher) {
         this.serviceProvider = serviceProvider;
+        this.requestDispatcher = requestDispatcher;
+    }
+
+    private static RpcRequestDispatcher createDefaultDispatcher() {
         KRpcConfig config = KRpcApplication.getRpcConfig();
-        this.requestExecutor = new RpcRequestExecutor(
-                config.getBusinessThreads(), config.getBusinessQueueCapacity());
+        return new RpcRequestExecutor(config.getBusinessThreads(), config.getBusinessQueueCapacity());
     }
 
     @Override
@@ -46,7 +54,7 @@ public class NettyRpcServer implements RpcServer {
                     .option(ChannelOption.SO_BACKLOG, 1024)
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
-                    .childHandler(new NettyServerInitializer(serviceProvider, requestExecutor));
+                    .childHandler(new NettyServerInitializer(serviceProvider, requestDispatcher));
             channelFuture = serverBootstrap.bind(port).sync();
             bound = true;
             startedLatch.countDown();
@@ -58,7 +66,7 @@ public class NettyRpcServer implements RpcServer {
         } catch (Throwable t) {
             log.error("Netty 服务启动失败", t);
         } finally {
-            requestExecutor.shutdownGracefully();
+            requestDispatcher.shutdownGracefully();
             shutdown(bossGroup, workGroup);
             serviceProvider.close();
             bound = false;

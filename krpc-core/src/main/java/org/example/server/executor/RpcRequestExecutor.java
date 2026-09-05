@@ -7,7 +7,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public final class RpcRequestExecutor {
+public final class RpcRequestExecutor implements RpcRequestDispatcher {
     private final ThreadPoolExecutor executor;
 
     public RpcRequestExecutor(int workerThreads, int queueCapacity) {
@@ -27,7 +27,8 @@ public final class RpcRequestExecutor {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
-    public boolean submit(Runnable task) {
+    @Override
+    public boolean dispatch(Runnable task) {
         try {
             executor.execute(task);
             return true;
@@ -36,14 +37,17 @@ public final class RpcRequestExecutor {
         }
     }
 
+    @Override
     public int activeCount() {
         return executor.getActiveCount();
     }
 
+    @Override
     public int queueSize() {
         return executor.getQueue().size();
     }
 
+    @Override
     public void shutdownGracefully() {
         executor.shutdown();
         try {

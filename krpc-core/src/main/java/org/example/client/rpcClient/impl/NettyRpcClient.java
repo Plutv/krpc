@@ -37,8 +37,9 @@ public class NettyRpcClient implements RpcClient {
     private String host;
     private int port;
 
-    public static final Bootstrap bootstrap;
-    public static final EventLoopGroup eventLoopGroup;
+    private static final Object TRANSPORT_LOCK = new Object();
+    private static volatile Bootstrap bootstrap;
+    private static volatile EventLoopGroup eventLoopGroup;
     private static final ConcurrentMap<String, Channel> CHANNEL_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<String, Object> CHANNEL_LOCKS = new ConcurrentHashMap<>();
 
@@ -54,16 +55,7 @@ public class NettyRpcClient implements RpcClient {
     }
 
     static {
-        eventLoopGroup = new NioEventLoopGroup();
-        bootstrap = new Bootstrap();
-        bootstrap.group(eventLoopGroup)
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.WRITE_BUFFER_WATER_MARK,
-                        new WriteBufferWaterMark(WRITE_BUFFER_LOW_WATER_MARK, WRITE_BUFFER_HIGH_WATER_MARK))
-                .handler(new NettyClientInitializer());
+        initializeTransport();
     }
 
     @Override
@@ -167,7 +159,7 @@ public class NettyRpcClient implements RpcClient {
                 return cachedChannel;
             }
 
-            ChannelFuture connectFuture = bootstrap.connect(address.getHostString(), address.getPort());
+            ChannelFuture connectFuture = getBootstrap().connect(address.getHostString(), address.getPort());
             if (!connectFuture.await(CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 connectFuture.cancel(true);
                 connectFuture.channel().close();
@@ -192,11 +184,53 @@ public class NettyRpcClient implements RpcClient {
         return channel != null && channel.isActive();
     }
 
-    // Shut down the shared Netty event loop when the client is no longer needed.
+    private static Bootstrap getBootstrap() {
+        Bootstrap currentBootstrap = bootstrap;
+        EventLoopGroup currentGroup = eventLoopGroup;
+        if (currentBootstrap != null && currentGroup != null
+                && !currentGroup.isShuttingDown() && !currentGroup.isShutdown()) {
+            return currentBootstrap;
+        }
+        synchronized (TRANSPORT_LOCK) {
+            currentGroup = eventLoopGroup;
+            if (bootstrap == null || currentGroup == null
+                    || currentGroup.isShuttingDown() || currentGroup.isShutdown()) {
+                initializeTransport();
+            }
+            return bootstrap;
+        }
+    }
+
+    private static void initializeTransport() {
+        EventLoopGroup newEventLoopGroup = new NioEventLoopGroup();
+        Bootstrap newBootstrap = new Bootstrap();
+        newBootstrap.group(newEventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                        new WriteBufferWaterMark(WRITE_BUFFER_LOW_WATER_MARK, WRITE_BUFFER_HIGH_WATER_MARK))
+                .handler(new NettyClientInitializer());
+        eventLoopGroup = newEventLoopGroup;
+        bootstrap = newBootstrap;
+    }
+
     public static void shutdown() {
+        EventLoopGroup groupToShutdown;
+        synchronized (TRANSPORT_LOCK) {
+            for (Channel channel : CHANNEL_CACHE.values()) {
+                channel.close().syncUninterruptibly();
+            }
+            CHANNEL_CACHE.clear();
+            CHANNEL_LOCKS.clear();
+            groupToShutdown = eventLoopGroup;
+            bootstrap = null;
+            eventLoopGroup = null;
+        }
         try {
-            if (eventLoopGroup != null) {
-                eventLoopGroup.shutdownGracefully().sync();
+            if (groupToShutdown != null) {
+                groupToShutdown.shutdownGracefully().sync();
             }
         } catch (InterruptedException e) {
             log.error("failed to shut down Netty event loop: {}", e.getMessage(), e);
