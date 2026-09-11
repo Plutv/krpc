@@ -20,8 +20,7 @@ public class TraceIdGenerator {
     }
 
     public static String generateSpanId() {
-        Long timeStamp = System.currentTimeMillis();
-        return String.valueOf(timeStamp);
+        return Long.toHexString(SNOWFLAKE_ID_GENERATOR.nextId());
     }
 
     static class SnowflakeIdGenerator {

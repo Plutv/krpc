@@ -1,9 +1,9 @@
 package org.example.server.work;
 
 import lombok.AllArgsConstructor;
-import org.example.server.provider.ServiceProvider;
 import org.example.common.message.RpcRequest;
 import org.example.common.message.RpcResponse;
+import org.example.server.provider.ServiceProvider;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
@@ -14,8 +14,8 @@ import java.net.Socket;
 
 @AllArgsConstructor
 public class WorkThread implements Runnable {
-    private Socket socket;
-    private ServiceProvider serviceProvider;
+    private final Socket socket;
+    private final ServiceProvider serviceProvider;
 
     @Override
     public void run() {
@@ -34,15 +34,17 @@ public class WorkThread implements Runnable {
     private RpcResponse getResponse(RpcRequest rpcRequest) {
         Object service = serviceProvider.getService(rpcRequest.getInterfaceName());
         String methodName = rpcRequest.getMethodName();
-        Method method = null;
         try {
-            method = service.getClass().getMethod(methodName, rpcRequest.getParamsType());
+            Method method = service.getClass().getMethod(methodName, rpcRequest.getParamsType());
             Object invoke = method.invoke(service, rpcRequest.getParams());
-            return RpcResponse.success(invoke);
+            RpcResponse response = RpcResponse.success(invoke);
+            response.setRequestId(rpcRequest.getRequestId());
+            return response;
         } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
             e.printStackTrace();
-            System.out.println("方法执行错误");
-            return RpcResponse.fail();
+            RpcResponse response = RpcResponse.fail();
+            response.setRequestId(rpcRequest.getRequestId());
+            return response;
         }
     }
 }

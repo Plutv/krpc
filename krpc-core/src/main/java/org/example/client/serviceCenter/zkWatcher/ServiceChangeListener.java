@@ -1,8 +1,8 @@
 package org.example.client.serviceCenter.zkWatcher;
 
 /**
- * Zookeeper 服务节点变化回调。
- * 由 ZkServiceCenter 统一协调：更新本地缓存 + 更新对应服务的一致性哈希环。
+ * Zookeeper node change callback.
+ * ZkServiceCenter coordinates cache update + load-balance update.
  */
 public interface ServiceChangeListener {
 
@@ -14,5 +14,18 @@ public interface ServiceChangeListener {
         onRemove(serviceName, oldAddress);
         onAdd(serviceName, newAddress);
     }
-}
 
+    default void onRetryAdd(String serviceName) {
+    }
+
+    default void onRetryRemove(String serviceName) {
+    }
+
+    default void onRetryAdd(String serviceName, String address) {
+        onRetryAdd(serviceName);
+    }
+
+    default void onRetryRemove(String serviceName, String address) {
+        onRetryRemove(serviceName);
+    }
+}

@@ -5,14 +5,15 @@ import org.example.trace.TraceIdGenerator;
 import org.example.trace.ZipkinReporter;
 
 public class ServerTraceInterceptor {
-    public static void beforeHandle() {
-        String traceId = TraceContext.getTraceId();
-        String parentSpanId = TraceContext.getParentSpanId();
+    public static void beforeHandle(String traceId, String parentSpanId) {
         String spanId = TraceIdGenerator.generateSpanId();
 
-        // TODO：获取又设置？
-        TraceContext.setTraceId(traceId);
-        TraceContext.setParentSpanId(parentSpanId);
+        TraceContext.clear();
+        TraceContext.setTraceId(traceId == null || traceId.isEmpty()
+                ? TraceIdGenerator.generateTraceId() : traceId);
+        if (parentSpanId != null && !parentSpanId.isEmpty()) {
+            TraceContext.setParentSpanId(parentSpanId);
+        }
         TraceContext.setSpanId(spanId);
 
         long startTimeStamp = System.currentTimeMillis();
@@ -21,20 +22,27 @@ public class ServerTraceInterceptor {
 
     public static void afterHandle(String serviceName) {
         long endTimeStamp = System.currentTimeMillis();
-        long startTimeStamp = Long.valueOf(TraceContext.getStartTimeStamp());
+        String start = TraceContext.getStartTimeStamp();
+        if (start == null) {
+            TraceContext.clear();
+            return;
+        }
+        long startTimeStamp = Long.parseLong(start);
         long duration = endTimeStamp - startTimeStamp;
 
-        ZipkinReporter.reportSpan(
-                TraceContext.getTraceId(),
-                TraceContext.getSpanId(),
-                TraceContext.getParentSpanId(),
-                "server-" + serviceName,
-                startTimeStamp,
-                duration,
-                serviceName,
-                "server"
-        );
-
-        TraceContext.clear();
+        try {
+            ZipkinReporter.reportSpan(
+                    TraceContext.getTraceId(),
+                    TraceContext.getSpanId(),
+                    TraceContext.getParentSpanId(),
+                    "server-" + serviceName,
+                    startTimeStamp,
+                    duration,
+                    serviceName,
+                    "server"
+            );
+        } finally {
+            TraceContext.clear();
+        }
     }
 }

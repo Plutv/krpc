@@ -75,4 +75,9 @@ public class ProtobufSerializer implements Serializer {
         }
         return schema;
     }
+
+    @Override
+    public String toString() {
+        return "Protobuf";
+    }
 }

@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.util.UUID;
 
 public class SimpleSocketRpcClient implements RpcClient {
     private String host;
@@ -21,6 +22,9 @@ public class SimpleSocketRpcClient implements RpcClient {
     @Override
     public RpcResponse sendRequest(RpcRequest rpcRequest) {
         try {
+            if (rpcRequest.getRequestId() == null || rpcRequest.getRequestId().isEmpty()) {
+                rpcRequest.setRequestId(UUID.randomUUID().toString());
+            }
             Socket socket = new Socket(host, port);
             ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
             ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());

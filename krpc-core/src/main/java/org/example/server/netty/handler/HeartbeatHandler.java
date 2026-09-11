@@ -9,19 +9,20 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class HeartbeatHandler extends ChannelDuplexHandler {
     @Override
-    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-        try {
-            if (evt instanceof IdleStateEvent) {
-                IdleStateEvent idleStateEvent = (IdleStateEvent) evt;
-                IdleState idleState = idleStateEvent.state();
-                if (idleState == IdleState.WRITER_IDLE) {
-                    log.info("写等待超过20s，关闭channel");
-                } else if (idleState == IdleState.READER_IDLE) {
-                    log.info("读等待超过10s，关闭channel");
-                }
-            }
-        } catch (Exception e) {
-            log.error("处理事件发生异常", e);
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (!(evt instanceof IdleStateEvent)) {
+            super.userEventTriggered(ctx, evt);
+            return;
         }
-    } 
+
+        IdleStateEvent idleStateEvent = (IdleStateEvent) evt;
+        IdleState idleState = idleStateEvent.state();
+        if (idleState == IdleState.READER_IDLE) {
+            log.warn("No inbound data for a while, closing channel: {}", ctx.channel().remoteAddress());
+            ctx.close();
+            return;
+        }
+
+        super.userEventTriggered(ctx, evt);
+    }
 }

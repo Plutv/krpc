@@ -1,39 +1,40 @@
 package org.example.server.ratelimit;
 
-public class TokenBucketRateLimitImpl implements org.example.server.ratelimit.RateLimit {
+public class TokenBucketRateLimitImpl implements RateLimit {
+    private final int capacity;
+    private final int refillRatePerSecond;
 
-    private int RATE;
-    private int CAPACITY;
-    private volatile int curCapicity;
-    private volatile long lastTimeStamp; // 上次请求时间戳
+    private double currentTokens;
+    private long lastRefillNanos;
 
-    public TokenBucketRateLimitImpl(int capicity, int rate) {
-        RATE = rate;
-        CAPACITY = capicity;
-        curCapicity = capicity;
-        lastTimeStamp = System.currentTimeMillis();
+    public TokenBucketRateLimitImpl(int capacity, int refillRatePerSecond) {
+        this.capacity = capacity;
+        this.refillRatePerSecond = refillRatePerSecond;
+        this.currentTokens = capacity;
+        this.lastRefillNanos = System.nanoTime();
     }
 
     @Override
-    public boolean getToken() {
-        synchronized (this) {
-            if (curCapicity > 0) {
-                curCapicity--;
-                return true;
-            }
-            long current = System.currentTimeMillis();
-            if (current - lastTimeStamp >= RATE) {
-                if ((current - lastTimeStamp) / RATE >= 2) {
-                    curCapicity += (int) (((current - lastTimeStamp) / RATE) - 1);
-                }
-                if (curCapicity > CAPACITY) {
-                    curCapicity = CAPACITY;
-                }
-                lastTimeStamp = current;
-                return true;
-            }
+    public synchronized boolean getToken() {
+        refill();
+        if (currentTokens < 1d) {
             return false;
         }
+        currentTokens -= 1d;
+        return true;
+    }
 
+    private void refill() {
+        long now = System.nanoTime();
+        long elapsed = now - lastRefillNanos;
+        if (elapsed <= 0) {
+            return;
+        }
+        double tokensToAdd = (elapsed / 1_000_000_000d) * refillRatePerSecond;
+        if (tokensToAdd <= 0d) {
+            return;
+        }
+        currentTokens = Math.min(capacity, currentTokens + tokensToAdd);
+        lastRefillNanos = now;
     }
 }

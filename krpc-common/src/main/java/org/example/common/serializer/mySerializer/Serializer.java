@@ -1,8 +1,5 @@
 package org.example.common.serializer.mySerializer;
 
-import java.util.HashMap;
-import java.util.Map;
-
 public interface Serializer {
     byte[] serialize(Object obj);
 
@@ -11,11 +8,42 @@ public interface Serializer {
     int getType();
 
     static Serializer getSerializerByCode(int code) {
-        Map<Integer, Serializer> serializerMap = new HashMap<>();
-        serializerMap.put(0, new ObjectSerializer());
-        serializerMap.put(1, new JsonSerializer());
-        serializerMap.put(2, new HessianSerializer());
-        serializerMap.put(3, new ProtobufSerializer());
-        return serializerMap.get(code);
+        switch (code) {
+            case 0:
+                return new ObjectSerializer();
+            case 1:
+                return new JsonSerializer();
+            case 2:
+                return new HessianSerializer();
+            case 3:
+                return new ProtobufSerializer();
+            default:
+                return null;
+        }
+    }
+
+    static Serializer getSerializerByName(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return new JsonSerializer();
+        }
+
+        String normalized = name.trim().toLowerCase();
+        switch (normalized) {
+            case "jdk":
+            case "java":
+            case "object":
+                return new ObjectSerializer();
+            case "json":
+            case "fastjson":
+                return new JsonSerializer();
+            case "hessian":
+                return new HessianSerializer();
+            case "protobuf":
+            case "protostuff":
+            case "proto":
+                return new ProtobufSerializer();
+            default:
+                throw new IllegalArgumentException("Unsupported serializer name: " + name);
+        }
     }
 }

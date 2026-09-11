@@ -1,25 +1,36 @@
 package org.example.client.serviceCenter.balance;
 
 import java.util.List;
-import java.util.Random;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 
-public class RandomLoadBalance implements org.example.client.serviceCenter.balance.LoadBalance {
+public class RandomLoadBalance implements LoadBalance {
+    private final List<String> addressList = new CopyOnWriteArrayList<>();
 
     @Override
-    public String balance(List<String> addressList) {
-        Random random = new Random();
-        int choose = random.nextInt(addressList.size());
-        System.out.println("load balance server: " + choose);
-        return addressList.get(choose);
+    public String balance(List<String> candidates) {
+        List<String> target = (candidates == null || candidates.isEmpty()) ? addressList : candidates;
+        if (target.isEmpty()) {
+            throw new IllegalArgumentException("addressList is empty");
+        }
+        int choose = ThreadLocalRandom.current().nextInt(target.size());
+        return target.get(choose);
     }
 
     @Override
     public void addNode(String node) {
-
+        if (node != null && !node.isEmpty() && !addressList.contains(node)) {
+            addressList.add(node);
+        }
     }
 
     @Override
     public void delNode(String node) {
+        addressList.remove(node);
+    }
 
+    @Override
+    public String toString() {
+        return "Random";
     }
 }

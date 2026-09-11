@@ -33,7 +33,8 @@ public class JsonSerializer implements org.example.common.serializer.mySerialize
             case 1:
                 RpcResponse response = JSONObject.parseObject(bytes, RpcResponse.class);
                 Class<?> dataType = response.getDataType();
-                if (!dataType.isAssignableFrom(response.getData().getClass())) {
+                if (dataType != null && response.getData() != null
+                        && !dataType.isAssignableFrom(response.getData().getClass())) {
                     response.setData(JSONObject.toJavaObject((JSONObject)response.getData(), dataType));
                 }
                 obj = response;

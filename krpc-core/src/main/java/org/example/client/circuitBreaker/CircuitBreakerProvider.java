@@ -12,7 +12,7 @@ public class CircuitBreakerProvider {
     public synchronized CircuitBreaker getCircuitBreaker(String serviceName) {
         return circuitBreakerMap.computeIfAbsent(serviceName, key -> {
             log.info("Create circuit breaker for service: {}", serviceName);
-            return new CircuitBreaker(1, 0.5, 2, 1000);
+            return new CircuitBreaker(3, 0.6, 3, 5000);
         });
     }
 }

@@ -4,12 +4,11 @@ import com.caucho.hessian.io.HessianInput;
 import com.caucho.hessian.io.HessianOutput;
 import org.example.common.exception.SerializeException;
 
-import javax.sql.rowset.serial.SerialException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
-public class HessianSerializer implements Serializer{
+public class HessianSerializer implements Serializer {
     @Override
     public byte[] serialize(Object obj) {
         try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
@@ -17,7 +16,7 @@ public class HessianSerializer implements Serializer{
             hessianOutput.writeObject(obj);
             return byteArrayOutputStream.toByteArray();
         } catch (IOException e) {
-            throw new SerializeException("序列化失败！");
+            throw new SerializeException("Hessian serialize failed");
         }
     }
 
@@ -27,13 +26,13 @@ public class HessianSerializer implements Serializer{
             HessianInput hessianInput = new HessianInput(byteArrayInputStream);
             return hessianInput.readObject();
         } catch (IOException e) {
-            throw new SerializeException("反序列化失败！");
+            throw new SerializeException("Hessian deserialize failed");
         }
     }
 
     @Override
     public int getType() {
-        return 3;
+        return 2;
     }
 
     @Override

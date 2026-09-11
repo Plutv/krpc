@@ -27,7 +27,7 @@ public class ClientProxy implements InvocationHandler {
 
     private CircuitBreakerProvider circuitBreakerProvider;
 
-    public ClientProxy() throws InterruptedException{
+    public ClientProxy() throws InterruptedException {
         serviceCenter = new ZkServiceCenter();
         rpcClient = new NettyRpcClient(serviceCenter);
         circuitBreakerProvider = new CircuitBreakerProvider();
@@ -38,12 +38,7 @@ public class ClientProxy implements InvocationHandler {
         switch (choose) {
             case 0:
                 serviceCenter = buildFixedServiceCenter(host, port);
-                try {
-                    rpcClient = new NettyRpcClient(serviceCenter);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Failed to init netty rpc client", e);
-                }
+                rpcClient = new NettyRpcClient(serviceCenter);
                 break;
             case 1:
                 rpcClient = new SimpleSocketRpcClient(host, port);
@@ -56,12 +51,7 @@ public class ClientProxy implements InvocationHandler {
     public ClientProxy(String host, int port) {
         circuitBreakerProvider = new CircuitBreakerProvider();
         serviceCenter = buildFixedServiceCenter(host, port);
-        try {
-            rpcClient = new NettyRpcClient(serviceCenter);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Failed to init netty rpc client", e);
-        }
+        rpcClient = new NettyRpcClient(serviceCenter);
     }
 
 
