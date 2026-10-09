@@ -5,6 +5,10 @@ target/
 .idea/
 *.log
 
+### Local notes ###
+/docs/
+/.workbuddy-ai/
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml

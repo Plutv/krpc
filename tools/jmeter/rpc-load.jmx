@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="KRPC TCP load test" enabled="true">
+      <stringProp name="TestPlan.comments">Fixed-address transport baseline. Registry, retries, rate limiting and tracing are disabled.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <stringProp name="TestPlan.user_define_classpath"/>
+    </TestPlan>
+    <hashTree>
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="Warmup (excluded from HTML report)" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(warmupLoops,1000)}</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="Warmup echo" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="host" elementType="Argument"><stringProp name="Argument.name">host</stringProp><stringProp name="Argument.value">${__P(host,127.0.0.1)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="port" elementType="Argument"><stringProp name="Argument.name">port</stringProp><stringProp name="Argument.value">${__P(port,9999)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="serializer" elementType="Argument"><stringProp name="Argument.name">serializer</stringProp><stringProp name="Argument.value">${__P(serializer,hessian)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="payloadBytes" elementType="Argument"><stringProp name="Argument.name">payloadBytes</stringProp><stringProp name="Argument.value">${__P(payloadBytes,1024)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="slowPercent" elementType="Argument"><stringProp name="Argument.name">slowPercent</stringProp><stringProp name="Argument.value">0</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="labelPrefix" elementType="Argument"><stringProp name="Argument.name">labelPrefix</stringProp><stringProp name="Argument.value">RPC warmup</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="classname">org.example.jmeter.RpcJavaSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="RPC callers" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(loops,-1)}</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(threads,10)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(rampSeconds,2)}</stringProp>
+        <stringProp name="ThreadGroup.scheduler">${__P(scheduler,true)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(durationSeconds,30)}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="RPC echo" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" enabled="true">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="host" elementType="Argument"><stringProp name="Argument.name">host</stringProp><stringProp name="Argument.value">${__P(host,127.0.0.1)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="port" elementType="Argument"><stringProp name="Argument.name">port</stringProp><stringProp name="Argument.value">${__P(port,9999)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="serializer" elementType="Argument"><stringProp name="Argument.name">serializer</stringProp><stringProp name="Argument.value">${__P(serializer,hessian)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="payloadBytes" elementType="Argument"><stringProp name="Argument.name">payloadBytes</stringProp><stringProp name="Argument.value">${__P(payloadBytes,1024)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="slowPercent" elementType="Argument"><stringProp name="Argument.name">slowPercent</stringProp><stringProp name="Argument.value">${__P(slowPercent,0)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+              <elementProp name="slowMillis" elementType="Argument"><stringProp name="Argument.name">slowMillis</stringProp><stringProp name="Argument.value">${__P(slowMillis,100)}</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="classname">org.example.jmeter.RpcJavaSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
